@@ -10,3 +10,10 @@ use_in_formula <- c(
 
 accidents_key <- accidents[, use_in_formula]
 accidents_key[,1:13] <- lapply(accidents_key[,1:13], factor)
+
+accidents %>%
+    filter(speed_limit != -1) %>%
+    ggplot(aes(x = speed_limit)) +
+    geom_bar() +
+    xlab("Speed Limit") +
+    ylab("Count")

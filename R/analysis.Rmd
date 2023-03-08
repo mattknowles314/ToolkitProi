@@ -2,7 +2,9 @@
 title: "Preliminary Analysis of RTC Data"
 author: "Matthew Knowles"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -61,14 +63,14 @@ use_in_formula <- c(
 accidents_key <- accidents[, use_in_formula]
 has.neg <- apply(accidents_key, 1, function (row) any(row < 0))
 accidents_data <- accidents_key[-which(has.neg), ]
-
+accidents_data <- as.factor(accidents_data)
+accidents_data$accident_severity <- as.numeric(accidents_data$accident_severity)
 model <- glm(data = accidents_data,
              formula = accident_severity ~ .,
              poisson
              )
-
 ```
-
+  
 
 Let's take a look at what the model spits out!
 

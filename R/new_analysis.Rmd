@@ -1,0 +1,100 @@
+---
+title: "Preliminary Analysis of RTC Data"
+author: "Matthew Knowles"
+date: "`r Sys.Date()`"
+output:
+    pdf_document: default
+html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(purrr)
+set.seed(5)
+accidents <- read.csv("../Data/dft-road-casualty-statistics-accident-2020.csv")
+vehicles <- read.csv("../Data/dft-road-casualty-statistics-casualty-2020.csv")
+casualties <- read.csv("../Data/dft-road-casualty-statistics-vehicle-2020.csv")
+```
+
+# 1: Data Cleaning
+
+We begin by converting to a binary variable by severity. Accidents with a severity of 1 stay as such, and others are converted to a 0. 
+
+```{r}
+accidents <- accidents %>% 
+    mutate(bin_severity = ifelse(.data$accident_severity == 1, 1, 0)) %>% 
+    filter(light_conditions != -1)
+```
+
+We now reduce the size of the dataset to contain only variables we care about
+
+```{r}
+accidents <- accidents %>% 
+    select(
+        "bin_severity",
+        "first_road_class",
+        "day_of_week",
+        "road_type",
+        "speed_limit",
+        "junction_detail",
+        "second_road_class",
+        "light_conditions",
+        "weather_conditions",
+        "road_surface_conditions"
+    )
+```
+
+We want all variables, except speed limit to be factors.
+
+```{r}
+accidents <- accidents %>%
+    mutate(across(where(is.integer), as.factor))
+accidents$speed_limit <- as.integer(accidents$speed_limit)
+
+head(tibble(accidents))
+```
+
+
+We can now also create a train and test set for later on.
+
+```{r}
+accidents$id <- 1:nrow(accidents)
+accidents_train <- accidents %>% sample_frac(0.7)
+accidents_test <- anti_join(accidents, accidents_train, by = "id")
+```
+
+# 2: Fitting
+
+```{r}
+fit <- glm(
+    data = accidents_train,
+    formula = bin_severity ~ .,
+    family = binomial(link = "logit")
+)
+```
+
+Let us take a look at the summary of this model.
+
+```{r}
+summary(fit)
+```
+
+```{r}
+hist(fit$fitted.values)
+```
+
+# 3: Predicting Unseen Values
+
+```{r}
+predict_fit <- predict(
+    fit,
+    newdata = accidents_test,
+    type = "response"
+)
+```
+
+```{r}
+hist(predict_fit)
+```
