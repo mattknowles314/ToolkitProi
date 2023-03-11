@@ -14,8 +14,8 @@ library(ggplot2)
 library(purrr)
 set.seed(5)
 accidents <- read.csv("../Data/dft-road-casualty-statistics-accident-2020.csv")
-vehicles <- read.csv("../Data/dft-road-casualty-statistics-casualty-2020.csv")
-casualties <- read.csv("../Data/dft-road-casualty-statistics-vehicle-2020.csv")
+casualty <- read.csv("../Data/dft-road-casualty-statistics-casualty-2020.csv")
+vehicles <- read.csv("../Data/dft-road-casualty-statistics-vehicle-2020.csv")
 ```
 
 # 1: Data Cleaning
@@ -24,62 +24,91 @@ We begin by converting to a binary variable by severity. Accidents with a severi
 
 ```{r}
 accidents <- accidents %>% 
-    mutate(bin_severity = ifelse(.data$accident_severity == 1, 1, 0)) %>% 
-    filter(light_conditions != -1)
+    mutate(bin_severity = ifelse(.data$accident_severity == 1, 1, 0))
 ```
 
-We now reduce the size of the dataset to contain only variables we care about
+We now reduce the size of the dataset to contain only variables we care about. 
 
 ```{r}
-accidents <- accidents %>% 
+sub_accidents <- accidents %>% 
     select(
+        "accident_index",
         "bin_severity",
-        "first_road_class",
         "day_of_week",
         "road_type",
         "speed_limit",
-        "junction_detail",
-        "second_road_class",
         "light_conditions",
         "weather_conditions",
         "road_surface_conditions"
     )
+
+sub_vehicles <- vehicles %>% 
+    select(
+        "accident_index",
+        "sex_of_driver",
+        "age_band_of_driver"
+    )
+
+sub_casualties <- casualty %>% 
+    select(
+        "accident_index",
+        "sex_of_casualty",
+        "age_band_of_casualty"
+    )
+
+df_sub <- merge.data.frame(sub_vehicles, sub_casualties, by = "accident_index")
+df_sub_unique <- unique(df_sub)
+df <- merge.data.frame(sub_accidents, df_sub_unique, by = "accident_index")
 ```
 
-We want all variables, except speed limit to be factors.
+We want all variables, except speed limit, to be factors. 
 
 ```{r}
-accidents <- accidents %>%
+df <- df %>%
     mutate(across(where(is.integer), as.factor))
-accidents$speed_limit <- as.integer(accidents$speed_limit)
-
-head(tibble(accidents))
+df$speed_limit <- as.integer(df$speed_limit) #Speed limit goes back to integer
+df$bin_severity <- as.factor(df$bin_severity)
+head(tibble(df))
 ```
+We need to remove any rows in which there is a -1 in a column of the data.
 
+```{r}
+has.neg <- apply(df, 1, function(row) any(row == -1))
+df <- df[-which(has.neg), ] %>% 
+    select(-accident_index)
+```
 
 We can now also create a train and test set for later on.
 
 ```{r}
-accidents$id <- 1:nrow(accidents)
-accidents_train <- accidents %>% sample_frac(0.7)
-accidents_test <- anti_join(accidents, accidents_train, by = "id")
+df$id <- 1:nrow(df)
+df_train <- df %>% sample_frac(0.8)
+df_test <- anti_join(df, df_train, by = "id")
 ```
 
 # 2: Fitting
 
+We fit the glm to the training data. We specify that the response variable is binomial, and that we wish to use a logit link function.
+
 ```{r}
 fit <- glm(
-    data = accidents_train,
+    data = df_train,
     formula = bin_severity ~ .,
     family = binomial(link = "logit")
 )
 ```
 
-Let us take a look at the summary of this model.
+Let us take a look at the summary and plots of this model.
 
 ```{r}
 summary(fit)
 ```
+
+```{r}
+plot(fit)
+```
+
+This histogram shows the distribution of fitted values from the training data.
 
 ```{r}
 hist(fit$fitted.values)
@@ -87,14 +116,20 @@ hist(fit$fitted.values)
 
 # 3: Predicting Unseen Values
 
+We can use the predict function to see how well the model predicts the response on unseen data.
+
 ```{r}
 predict_fit <- predict(
     fit,
-    newdata = accidents_test,
+    newdata = df_test,
     type = "response"
 )
 ```
 
+This histogram shows the distribution of fitted values from the test data.
+
 ```{r}
 hist(predict_fit)
 ```
+
+Notice the shape of this histogram and the previous one are identical.
