@@ -37,6 +37,7 @@ sub_accidents <- accidents %>%
         "day_of_week",
         "road_type",
         "speed_limit",
+        "time",
         "light_conditions",
         "weather_conditions",
         "road_surface_conditions"
@@ -61,7 +62,32 @@ df_sub_unique <- unique(df_sub)
 df <- merge.data.frame(sub_accidents, df_sub_unique, by = "accident_index")
 ```
 
-We want all variables, except speed limit, to be factors. 
+Before dealing with other variables in the dataset, we deal with time on its own. The times provided in the dataset are characters, for example of the form "12:14". There are many unique times in the dataset, which would cause issues when fitting models as these would all be treated as individual factors. We therefore split the 24 hour day into 6 chunks of 4 hours, as this dramatically reduces the number of factors, but also gives good information about the relationship between time of day and accident severity. 
+
+The first thing to do is build a function to parse the times by splitting the character before the colon, and converting that to an integer. A series of if-statements are then checked to put the time into the correct category. This isn't the most computationally efficient method, but it does the job. We then apply this function to every time observation to create a new column of data called "time_group", and drop the original time variable from the data so it doesn't cause problems later on.
+
+```{r}
+# Split time into 6 chunks of four hours
+parse_times <- function(time){
+    if (!is.character(time)) {
+        stop("Time is not character")
+    }
+
+    split_time <- stringr::str_split(time, ":", simplify = TRUE)
+    hour <- as.integer(split_time[1])
+    if (hour < 4) return(1)
+    if (hour < 8 ) return(2)
+    if (hour < 12) return(3)
+    if (hour < 16) return(4)
+    ifelse(hour < 20, return(5), return(6))
+}
+
+df <- df %>% 
+    mutate(time_group = purrr::map_int(time, parse_times)) %>% 
+    select(-time)
+```
+
+We want all variables, except speed limit, to be factors. To achieve this we mutate across all integer columns and change the type to factor. However, we need speed limit to stay as an integer to make the model adaptable to non-standard speed limits. The "bin_severity" column needs to be a factor, so we ensure this by calling the as.factor function once more just to ensure it is infact a factor. By viewing the head of the data as a tibble we can check that the columns are of expected type.
 
 ```{r}
 df <- df %>%
@@ -70,7 +96,8 @@ df$speed_limit <- as.integer(df$speed_limit) #Speed limit goes back to integer
 df$bin_severity <- as.factor(df$bin_severity)
 head(tibble(df))
 ```
-We need to remove any rows in which there is a -1 in a column of the data.
+
+Some observations of the data are -1. We don't want these in the data, so we trim the data down to remove any rows that contain -1 in any of the columns. This helps with run-time of the model as well due to the size of the data before this is done. At this stage we also remove the accident index variable, as it was only needed for combining the three datasets, and isn't needed in fitting the GLM itself.
 
 ```{r}
 has.neg <- apply(df, 1, function(row) any(row == -1))
@@ -78,7 +105,7 @@ df <- df[-which(has.neg), ] %>%
     select(-accident_index)
 ```
 
-We can now also create a train and test set for later on.
+Finally before fitting, split the data into two sets. A training and test set. The training set has been selected to contain a random sample of 80% of the original data, and the other 20% becomes the test set for later on. There is a of maths one could do to identify an optimal training data set size, but in this case we have selected an 80:20 split as a general rule of thumb.
 
 ```{r}
 df$id <- 1:nrow(df)
