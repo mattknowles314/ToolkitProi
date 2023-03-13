@@ -1,0 +1,14 @@
+name: EDA_Assessed_Project
+title: EDA_Assessed_Project
+username:
+account: mattknowles314
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 8557530
+bundleId: 6953819
+url: https://mattknowles314.shinyapps.io/EDA_Assessed_Project/
+when: 1678743550.3828
+lastSyncTime: 1678743550.38282
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: analysis_files/figure-latex/unnamed-chunk-1-1.pdf|analysis_files/figure-latex/unnamed-chunk-2-1.pdf|analysis.html|analysis.pdf|analysis.R|analysis.Rmd|explore.R|new_analysis.pdf|new_analysis.Rmd|read_data.R|report.pdf|report.Rmd|testing_times.R
