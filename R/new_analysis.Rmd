@@ -1,5 +1,5 @@
 ---
-title: "Preliminary Analysis of RTC Data"
+title: "Base model fitting for RTC Data"
 author: "Matthew Knowles"
 date: "`r Sys.Date()`"
 output:
@@ -12,19 +12,21 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(ggplot2)
 library(purrr)
+library(openxlsx)
 set.seed(5)
 accidents <- read.csv("../Data/dft-road-casualty-statistics-accident-2020.csv")
 casualty <- read.csv("../Data/dft-road-casualty-statistics-casualty-2020.csv")
 vehicles <- read.csv("../Data/dft-road-casualty-statistics-vehicle-2020.csv")
+regions <- read.xlsx("../Data/region_codesV2.xlsx", sheet = "Feuil1", cols = c(1, 2, 3))
 ```
 
 # 1: Data Cleaning
 
-We begin by converting to a binary variable by severity. Accidents with a severity of 1 stay as such, and others are converted to a 0. 
+We begin by converting to a binary variable by severity. Accidents with a severity of 3 become a 0, and others are converted to a 1. 
 
 ```{r}
 accidents <- accidents %>% 
-    mutate(bin_severity = ifelse(.data$accident_severity == 1, 1, 0))
+    mutate(bin_severity = ifelse(.data$accident_severity == 3, 0, 1))
 ```
 
 We now reduce the size of the dataset to contain only variables we care about. 
@@ -40,6 +42,7 @@ sub_accidents <- accidents %>%
         "time",
         "light_conditions",
         "weather_conditions",
+        "local_authority_ons_district",
         "road_surface_conditions"
     )
 
@@ -69,10 +72,6 @@ The first thing to do is build a function to parse the times by splitting the ch
 ```{r}
 # Split time into 6 chunks of four hours
 parse_times <- function(time){
-    if (!is.character(time)) {
-        stop("Time is not character")
-    }
-
     split_time <- stringr::str_split(time, ":", simplify = TRUE)
     hour <- as.integer(split_time[1])
     if (hour < 4) return(1)
@@ -85,6 +84,19 @@ parse_times <- function(time){
 df <- df %>% 
     mutate(time_group = purrr::map_int(time, parse_times)) %>% 
     select(-time)
+```
+
+Location is to be included, but in the current state, the *local_authority_ons_district* variable has too many unique values. To account for this, the region codes (those beginning with E0, N, S or W) are matched to a wider local area, such as the West Midlands, Yorkshire and The Humber etc. Across England, Wales, Scotland & Northern Ireland, there are 12 unique regions. Each region is assigned a numerical valuable. This assignment is done alphabetically, so East Midlands is 1, all the way through to Yorkshire and The Humber at 12. With this in mind, we can add region code to the data.
+
+```{r}
+# Obtains the numerical value of a region from a given ONS coded
+obtain_region <- function(region_code){
+    return(regions$Region.Code[which(regions$Code == region_code)])
+}
+
+df <- df %>% 
+    mutate(region = purrr::map_int(local_authority_ons_district, obtain_region)) %>% 
+    select(-local_authority_ons_district)
 ```
 
 We want all variables, except speed limit, to be factors. To achieve this we mutate across all integer columns and change the type to factor. However, we need speed limit to stay as an integer to make the model adaptable to non-standard speed limits. The "bin_severity" column needs to be a factor, so we ensure this by calling the as.factor function once more just to ensure it is infact a factor. By viewing the head of the data as a tibble we can check that the columns are of expected type.
@@ -105,17 +117,19 @@ df <- df[-which(has.neg), ] %>%
     select(-accident_index)
 ```
 
-Finally before fitting, split the data into two sets. A training and test set. The training set has been selected to contain a random sample of 80% of the original data, and the other 20% becomes the test set for later on. There is a of maths one could do to identify an optimal training data set size, but in this case we have selected an 80:20 split as a general rule of thumb.
+Finally before fitting, split the data into two sets. A training and test set. The training set has been selected to contain a random sample of 75% of the original data, and the other 25% becomes the test set for later on. There is a of maths one could do to identify an optimal training data set size, but in this case we have selected an 75:25 split as a general rule of thumb.
 
 ```{r}
 df$id <- 1:nrow(df)
-df_train <- df %>% sample_frac(0.8)
+df_train <- df %>% sample_frac(0.75) 
 df_test <- anti_join(df, df_train, by = "id")
+df_train <- df_train %>% select(-id)
+df_test <- df_test %>% select(-id)
 ```
 
 # 2: Fitting
 
-We fit the glm to the training data. We specify that the response variable is binomial, and that we wish to use a logit link function.
+We fit a general glm to the training data. We specify that the response variable is binomial, and that we wish to use a logit link function. No other interaction terms are included, as this will be built upon later.
 
 ```{r}
 fit <- glm(
@@ -159,4 +173,24 @@ This histogram shows the distribution of fitted values from the test data.
 hist(predict_fit)
 ```
 
-Notice the shape of this histogram and the previous one are identical.
+Notice the shape of this histogram and the previous one are identical. 
+
+# 4: Speed Limit and Road Type analysis
+
+We now present a slightly more specific model than the one we have just seen. We include an interaction term between speed limit and road type, allowing us to assess whether or not speed limits on a given road type are appropriate based on the contribution they make towards accident severity.
+
+```{r}
+fit_rt_sl <- glm(
+    data = df_train %>% select(-region),
+    formula = bin_severity ~ . + speed_limit*road_type,
+    family = binomial(link = "logit")
+)
+```
+
+We can view the summary of this model as before.
+
+```{r}
+summary(fit_rt_sl)
+```
+
+Notice the coefficients for road type 2 and 6 (one way street, single carriageway respectively) are on the same order as speed limit overall. This would suggest that perhaps a lower speed limit would be appropriate on thse particular road types. 
