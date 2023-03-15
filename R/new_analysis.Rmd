@@ -13,7 +13,9 @@ library(tidyverse)
 library(ggplot2)
 library(purrr)
 library(openxlsx)
-set.seed(5)
+library(naivebayes)
+
+
 accidents <- read.csv("../Data/dft-road-casualty-statistics-accident-2020.csv")
 casualty <- read.csv("../Data/dft-road-casualty-statistics-casualty-2020.csv")
 vehicles <- read.csv("../Data/dft-road-casualty-statistics-vehicle-2020.csv")
@@ -62,7 +64,8 @@ sub_casualties <- casualty %>%
 
 df_sub <- merge.data.frame(sub_vehicles, sub_casualties, by = "accident_index")
 df_sub_unique <- unique(df_sub)
-df <- merge.data.frame(sub_accidents, df_sub_unique, by = "accident_index")
+df <- merge.data.frame(sub_accidents, df_sub_unique, by = "accident_index") %>% 
+    filter(sex_of_casualty != 9)
 ```
 
 Before dealing with other variables in the dataset, we deal with time on its own. The times provided in the dataset are characters, for example of the form "12:14". There are many unique times in the dataset, which would cause issues when fitting models as these would all be treated as individual factors. We therefore split the 24 hour day into 6 chunks of 4 hours, as this dramatically reduces the number of factors, but also gives good information about the relationship between time of day and accident severity. 
@@ -117,23 +120,13 @@ df <- df[-which(has.neg), ] %>%
     select(-accident_index)
 ```
 
-Finally before fitting, split the data into two sets. A training and test set. The training set has been selected to contain a random sample of 75% of the original data, and the other 25% becomes the test set for later on. There is a of maths one could do to identify an optimal training data set size, but in this case we have selected an 75:25 split as a general rule of thumb.
-
-```{r}
-df$id <- 1:nrow(df)
-df_train <- df %>% sample_frac(0.75) 
-df_test <- anti_join(df, df_train, by = "id")
-df_train <- df_train %>% select(-id)
-df_test <- df_test %>% select(-id)
-```
-
 # 2: Fitting
 
 We fit a general glm to the training data. We specify that the response variable is binomial, and that we wish to use a logit link function. No other interaction terms are included, as this will be built upon later.
 
 ```{r}
 fit <- glm(
-    data = df_train,
+    data = df,
     formula = bin_severity ~ .,
     family = binomial(link = "logit")
 )
@@ -155,25 +148,92 @@ This histogram shows the distribution of fitted values from the training data.
 hist(fit$fitted.values)
 ```
 
-# 3: Predicting Unseen Values
+# 3: Cross Validation & Model Refining
 
-We can use the predict function to see how well the model predicts the response on unseen data.
+We can perform some bootstrapping on the model
+
+```{r, echo = FALSE, warning=FALSE}
+df$id <- seq(1:dim(df)[1]) # Sets an ID for each observation in df
+nboot <- 300 # Number of bootstrapping iteration
+
+# Create an empty dataset to hold number of correct and incorrect predictions for each iteration
+accuracy <- matrix(NA, nrow = nboot, ncol = 8,
+                          dimnames = list(
+                              rep = seq(nboot),
+                              coef = c("GLM Correct Predictions", "GLM Incorrect Predictions", "NB Correct Predictions", "NB Incorrect Predictions", "GLM False Severe", "GLM False Slight",
+                                       "NB False Severe", "NB False Slight"))
+                          )
+for (i in seq(nboot)) {
+    train <- df %>% sample_frac(1, replace = TRUE)
+    test <- anti_join(df,train, by = "id") %>% select(-id)
+    
+    # Fit a glm and nb models to the same data
+    sub_fit <- update(fit, train %>%  select(-id))
+    sub_nb <- naive_bayes(bin_severity ~., data = train %>% select(-id), laplace = 0.05)
+    
+    sub_predicts <- predict.glm(
+        sub_fit,
+        newdata = test,
+        type = "response"
+    )
+    
+    predicts_nb <- predict(
+        sub_nb, 
+        newdata = test,
+        type = "class"
+    )
+    
+    predictions_glm <- ifelse(sub_predicts <= 0.5, 0, 1)
+    X <- data.frame(test$bin_severity, predictions_glm, predicts_nb)
+    X$GLMResult <- ifelse(X$test.bin_severity == X$predictions_glm, 1, 0)
+    X$NBResult <- ifelse(X$test.bin_severity == X$predicts_nb, 1, 0)
+    
+    X$GLMFalseSevere <- ifelse(X$predictions_glm == 1 & X$test.bin_severity == 0, 1, 0)
+    X$GLMFalseSlight <- ifelse(X$predictions_glm == 0 & X$test.bin_severity == 1, 1, 0)
+    X$NBFalseSevere <- ifelse(X$predicts_nb == 1 & X$test.bin_severity == 0, 1, 0)
+    X$NBFalseSlight <- ifelse(X$predicts_nb == 0 & X$test.bin_severity == 1, 1, 0)
+    
+    result <- c(length(which(X$GLMResult == 1)), length(which(X$GLMResult == 0)), 
+                length(which(X$NBResult == 1)), length(which(X$NBResult == 0)),
+                length(which(X$GLMFalseSevere == 1)), length(which(X$GLMFalseSlight == 1)),
+                length(which(X$NBFalseSevere == 1)), length(which(X$NBFalseSlight == 1)))
+    
+    accuracy[i, ] <- result
+}
+
+accuracy <- data.frame(accuracy) %>% 
+    mutate(GLMPercCorrect = 100 * (GLM.Correct.Predictions/(GLM.Correct.Predictions + GLM.Incorrect.Predictions))) %>% 
+    mutate(NBPercCorrect = 100 * (NB.Correct.Predictions/(NB.Correct.Predictions + NB.Incorrect.Predictions))) %>% 
+    mutate(GLMPercFalseSevere = (GLM.False.Severe/GLM.False.Severe + GLM.False.Slight)) %>% 
+    mutate(GLMPercFalseSlight = (GLM.False.Slight/GLM.False.Severe + GLM.False.Slight)) %>% 
+    mutate(NBPercFalseSevere = (NB.False.Severe/NB.False.Severe + NB.False.Slight)) %>% 
+    mutate(NBPercFalseSlight = (NB.False.Slight/NB.False.Severe + NB.False.Slight)) 
+
+saveRDS(accuracy, file = "../Data/accuracy.RDS")
+
+```
+
+We can look at several useful plots to see how our model compares against a Naive-Bayes classifier.
 
 ```{r}
-predict_fit <- predict(
-    fit,
-    newdata = df_test,
-    type = "response"
+boxplot(accuracy$GLMPercCorrect, accuracy$NBPercCorrect,
+        names = c("GLM", "Naiive Bayes"),
+        ylab = "Percentage Correct",
+        main = "Percentage of Correctly Predicted Accident Severities")
+```
+
+The plot below presents the proportion false predictions in each category. So a case when the model predicted severe but the accident was slight or visa-versa.
+
+```{r}
+boxplot(accuracy$GLM.False.Severe, accuracy$GLM.False.Slight,
+        accuracy$NB.False.Severe, accuracy$NB.False.Slight,
+        names = c("GLM F. Severe", "GLM F. Slight",
+                 "NB F. Severe", "NB F. Slight"),
+        main = "Proportion of misclassifications"
 )
 ```
 
-This histogram shows the distribution of fitted values from the test data.
-
-```{r}
-hist(predict_fit)
-```
-
-Notice the shape of this histogram and the previous one are identical. 
+Interestingly, the GLM model had a lower proportion of false severes than Naive-Bayes, but a higher proportion of false slight accidents than Naive-Bayes.
 
 # 4: Speed Limit and Road Type analysis
 
@@ -181,7 +241,7 @@ We now present a slightly more specific model than the one we have just seen. We
 
 ```{r}
 fit_rt_sl <- glm(
-    data = df_train %>% select(-region),
+    data = df %>% select(-region),
     formula = bin_severity ~ . + speed_limit*road_type,
     family = binomial(link = "logit")
 )
